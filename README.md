@@ -4,16 +4,21 @@ An advanced, autonomous fortress management system for **Dwarf Fortress** (via D
 
 ## Key Features
 
-### Fortress Planner 2.0
-The core of the system is a deterministic, modular layout generator that ensures a functional and efficient fortress structure.
+### Fortress Planner & Pathfinding
+The core of the system is a deterministic, modular layout generator powered by **A* Pathfinding**.
 
-- **Hub-and-Spoke Layout**: Designed around a central 3x3 stairwell that acts as the main artery of the fortress, connecting all vertical levels.
-- **Dedicated Zoning**: Automatically designates specific Z-levels for distinct functions:
-    - **Entrance Level**: Trade Depot and defense tunnels.
-    - **Workshop Level**: Centralized manufacturing (Carpenters, Masons, etc.).
-    - **Storage Level**: High-capacity stockpiles below workshops for efficiency.
-    - **Living Levels**: Residential districts with proper room requirements.
-- **Wagon Accessibility**: Ensures the fortress is accessible to trade caravans by generating guaranteed 3-tile wide ramps and tunnels from the surface to the Trade Depot.
+-   **A* Ramp Generation**: Uses a custom 3D A* algorithm to find an optimal, hazard-free wagon path from the surface to the Trade Depot. It proactively avoids aquifers, magma, and caverns while ensuring a 3-tile wide clearance for wagons.
+-   **Hub-and-Spoke Layout**: Designed around a central 3x3 stairwell that acts as the main artery of the fortress, connecting all vertical levels.
+-   **Dedicated Zoning**: Automatically designates specific Z-levels for distinct functions (Entrance, Workshop, Storage, Living).
+-   **Wagon Accessibility**: Ensures the fortress is accessible to trade caravans by generating guaranteed 3-tile wide ramps and tunnels.
+
+### Automated Defense Systems
+-   **Trap Hall**: Automatically designs and constructs a defensive choke point full of traps. It intelligently checks stock and prioritizes **Cage Traps** for live capture, falling back to **Stone-Fall Traps**.
+-   **Emergency Burrows**: Detects sieges and ambushes in real-time. Automatically creates a "Siege Safe" burrow deep underground and restricts all civilians to safety until the threat is neutralized.
+
+### Noble & Military Management
+-   **Dynamic Noble Housing**: Periodically scans for unsatisfied nobles and automatically assigns them appropriate vacant rooms (Offices, Dining halls, Bedrooms). Assignments are prioritized by **noble precedence** (Monarch > Duke > ... > Bookkeeper).
+-   **Smart Military Logic**: Logistics manager now verifies resource availability (metal bars) before queuing equipment production, preventing job cancellation spam. Recruitment prioritizes dwarves with superior physical attributes.
 
 ### Advanced Terrain Analysis
 Safety is paramount. The system uses a sophisticated terrain scanner (`terrain.lua`) before making any decisions.
