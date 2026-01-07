@@ -757,6 +757,19 @@ function generate_fortress_plan(wagon_x, wagon_y, surface_z, population)
     
     -- Create Trap Corridor
     local trap_hall_tiles = create_corridor_tiles(depot_room_x, depot_room_y, center_x, center_y, depot_z)
+    
+    -- Register the Trap Hall as a Room so managers/trap.lua can find it
+    local trap_hall_room = Room.new(
+        graph:get_next_id(),
+        ROOM_TYPES.TRAP_HALL,
+        math.min(depot_room_x, center_x),
+        math.min(depot_room_y, center_y),
+        depot_z,
+        math.abs(depot_room_x - center_x) + 1,
+        math.abs(depot_room_y - center_y) + 1
+    )
+    graph:add_room(trap_hall_room)
+    
     for _, t in ipairs(trap_hall_tiles) do
          table.insert(all_tiles, t)
     end
