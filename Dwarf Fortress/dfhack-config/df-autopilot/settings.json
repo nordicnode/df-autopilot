@@ -1,0 +1,55 @@
+{
+    "tick_interval": 100,
+    "log_level": "debug",
+    "status_report_interval": 5000,
+    "food": {
+        "min_drinks": 50,
+        "min_food": 50,
+        "drinks_per_dwarf": 3,
+        "food_per_dwarf": 2,
+        "max_plants_to_brew": 30,
+        "max_food_to_cook": 20
+    },
+    "workshop": {
+        "min_bins": 20,
+        "min_barrels": 20,
+        "min_beds": 5,
+        "min_mechanisms": 10,
+        "check_interval": 500
+    },
+    "mining": {
+        "auto_expand": true,
+        "expansion_threshold": 0.8,
+        "min_z_levels": 3
+    },
+    "labor": {
+        "auto_assign": true,
+        "hauler_ratio": 0.3,
+        "military_ratio": 0.2
+    },
+    "military": {
+        "min_squad_size": 4,
+        "max_squads": 3,
+        "training_months": 6,
+        "auto_draft": true
+    },
+    "zone": {
+        "bedroom_size": 4,
+        "dining_min_value": 1000,
+        "hospital_beds": 5
+    },
+    "trade": {
+        "auto_trade": true,
+        "export_threshold": 100,
+        "import_priority": [
+            "steel",
+            "iron",
+            "coal"
+        ]
+    },
+    "emergency": {
+        "lockdown_on_siege": true,
+        "alert_military": true,
+        "seal_breaches": true
+    }
+}

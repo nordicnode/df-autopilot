@@ -1,0 +1,20 @@
+# Ignore everything in Dwarf Fortress directory by default
+Dwarf Fortress/*
+
+# Allow hack directory
+!Dwarf Fortress/hack
+Dwarf Fortress/hack/*
+
+# Allow hack/scripts
+!Dwarf Fortress/hack/scripts
+Dwarf Fortress/hack/scripts/*
+
+# Allow df-autopilot script folder (and everything inside)
+!Dwarf Fortress/hack/scripts/df-autopilot/
+
+# Allow config directory
+!Dwarf Fortress/dfhack-config
+Dwarf Fortress/dfhack-config/*
+
+# Allow df-autopilot config folder (and everything inside)
+!Dwarf Fortress/dfhack-config/df-autopilot/
