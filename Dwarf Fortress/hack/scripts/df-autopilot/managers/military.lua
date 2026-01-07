@@ -92,23 +92,35 @@ local function ensure_weapons()
     local soldiers = count_soldiers()
     
     if weapon_count < soldiers + 5 then
-        -- Queue weapon production (wooden training weapons as fallback)
+        -- Queue weapon production
         if not utils.order_exists(df.job_type.MakeWeapon, 0) then
-            -- Try to make wooden training weapons
-            utils.create_order(df.job_type.MakeWeapon, 5)
+            if utils.has_metal_bars(5) then
+                -- Make metal weapons if we have bars
+                utils.create_order(df.job_type.MakeWeapon, 5)
+            else
+                -- Fallback: wooden training weapons
+                -- Note: MakeWeapon usually defaults to metal at forge, wood at carpenter
+                -- We assume standard manager order logic here, or specialized auto-job
+                -- For now, we trust the manager to pick available materials or stall safely
+                -- But logging a warning is good.
+                utils.log_debug("No metal bars for weapons, skipping order", MANAGER_NAME)
+            end
         end
     end
 end
 
 --- Order armor production  
 local function ensure_armor()
-    -- Check leather armor at minimum
     local armor_count = utils.count_items(df.item_type.ARMOR, nil)
     local soldiers = count_soldiers()
     
     if armor_count < soldiers then
         if not utils.order_exists(df.job_type.MakeArmor, 0) then
-            utils.create_order(df.job_type.MakeArmor, 3)
+             if utils.has_metal_bars(5) then
+                utils.create_order(df.job_type.MakeArmor, 3)
+             else
+                utils.log_debug("No metal bars for armor, skipping order", MANAGER_NAME)
+             end
         end
     end
 end
@@ -283,30 +295,49 @@ local function recruit_soldiers()
         return
     end
     
-    -- Sort candidates by combat skills
+    -- Sort candidates by combat skills and physical attributes
     table.sort(candidates, function(a, b)
-        -- Prefer dwarves with combat skills
-        local a_skill = 0
-        local b_skill = 0
+        local a_score = 0
+        local b_score = 0
+        
+        local function get_score(unit)
+            local score = 0
+            -- Skills
+            if unit.status and unit.status.current_soul then
+                for _, skill in pairs(unit.status.current_soul.skills) do
+                    if (skill.id >= df.job_skill.AXE and skill.id <= df.job_skill.THROW) or
+                       skill.id == df.job_skill.ARMOR or skill.id == df.job_skill.SHIELD or
+                       skill.id == df.job_skill.DODGING or skill.id == df.job_skill.FIGHTER then
+                        score = score + skill.rating * 10
+                    end
+                end
+            end
+            
+            -- Attributes (Strength, Toughness, Agility) - vital for survival
+            if unit.body then
+                 if unit.body.physical_attrs.STRENGTH then
+                    score = score + (unit.body.physical_attrs.STRENGTH.value / 100)
+                 end
+                 if unit.body.physical_attrs.TOUGHNESS then
+                    score = score + (unit.body.physical_attrs.TOUGHNESS.value / 100)
+                 end
+                 if unit.body.physical_attrs.AGILITY then
+                    score = score + (unit.body.physical_attrs.AGILITY.value / 100)
+                 end
+                 -- Recuperation is good too
+                 if unit.body.physical_attrs.RECUPERATION then
+                    score = score + (unit.body.physical_attrs.RECUPERATION.value / 100)
+                 end
+            end
+            return score
+        end
         
         pcall(function()
-            if a.status and a.status.current_soul then
-                for _, skill in pairs(a.status.current_soul.skills) do
-                    if skill.id >= df.job_skill.AXE and skill.id <= df.job_skill.THROW then
-                        a_skill = a_skill + skill.rating
-                    end
-                end
-            end
-            if b.status and b.status.current_soul then
-                for _, skill in pairs(b.status.current_soul.skills) do
-                    if skill.id >= df.job_skill.AXE and skill.id <= df.job_skill.THROW then
-                        b_skill = b_skill + skill.rating
-                    end
-                end
-            end
+            a_score = get_score(a)
+            b_score = get_score(b)
         end)
         
-        return a_skill > b_skill
+        return a_score > b_score
     end)
     
     -- Assign up to (target - current) soldiers

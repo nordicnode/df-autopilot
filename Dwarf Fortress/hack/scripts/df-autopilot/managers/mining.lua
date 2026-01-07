@@ -214,65 +214,40 @@ local function find_fortress_center()
     return cx, cy, cz
 end
 
+local static_layout = reqscript("df-autopilot/layouts/static")
+
 -------------------------------------------------------------------------------
--- Simple Dig Patterns
+-- Helper Functions (for legacy expansion, can be moved later)
 -------------------------------------------------------------------------------
 
---- Dig a horizontal corridor
+--- Check if a tile is diggable (wall, floor, etc.) for internal checks
+local function is_diggable_tile(ttype)
+     if not ttype then return false end
+     local ok, shape = pcall(function() return df.tiletype.attrs[ttype].shape end)
+     if not ok then return false end
+     return shape == df.tiletype_shape.WALL or shape == df.tiletype_shape.FORTIFICATION
+end
+
+-- Re-implement basic dig helpers for expansion compatibility (since we removed the bulk ones)
+-- Ideally separate expansion entirely too.
 local function dig_corridor(x1, y1, z, x2, y2)
     local count = 0
-    local min_x = math.min(x1, x2)
-    local max_x = math.max(x1, x2)
-    local min_y = math.min(y1, y2)
-    local max_y = math.max(y1, y2)
-    
-    for x = min_x, max_x do
-        for y = min_y, max_y do
-            local ttype = utils.get_tile_type(x, y, z)
-            if is_diggable(ttype) and not has_dig_designation(x, y, z) then
-                if designate_dig(x, y, z) then
-                    count = count + 1
-                end
-            end
-        end
-    end
-    
+    local min_x, max_x = math.min(x1, x2), math.max(x1, x2)
+    local min_y, max_y = math.min(y1, y2), math.max(y1, y2)
+    for x=min_x, max_x do for y=min_y, max_y do
+        local ttype = utils.get_tile_type(x,y,z)
+        if is_diggable_tile(ttype) and not has_dig_designation(x,y,z) and designate_dig(x,y,z) then count = count + 1 end
+    end end
     return count
 end
-
---- Dig a room (rectangular area)
 local function dig_room(x, y, z, width, height)
-    local half_w = math.floor(width / 2)
-    local half_h = math.floor(height / 2)
-    
-    return dig_corridor(x - half_w, y - half_h, z, x + half_w, y + half_h)
+    local hw, hh = math.floor(width/2), math.floor(height/2)
+    return dig_corridor(x-hw, y-hh, z, x+hw, y+hh)
 end
-
---- Dig stairs down
-local function dig_stairs_down(x, y, z)
-    local ttype = utils.get_tile_type(x, y, z)
-    if is_diggable(ttype) and not has_dig_designation(x, y, z) then
-        designate_dig(x, y, z, df.tile_dig_designation.DownStair)
-        return true
-    end
-    return false
-end
-
---- Dig stairs up
-local function dig_stairs_up(x, y, z)
-    local ttype = utils.get_tile_type(x, y, z)
-    if is_diggable(ttype) and not has_dig_designation(x, y, z) then
-        designate_dig(x, y, z, df.tile_dig_designation.UpStair)
-        return true
-    end
-    return false
-end
-
---- Dig up/down stairs
-local function dig_stairs_updown(x, y, z)
-    local ttype = utils.get_tile_type(x, y, z)
-    if is_diggable(ttype) and not has_dig_designation(x, y, z) then
-        designate_dig(x, y, z, df.tile_dig_designation.UpDownStair)
+local function dig_stairs_updown(x,y,z)
+    local ttype = utils.get_tile_type(x,y,z)
+    if is_diggable_tile(ttype) and not has_dig_designation(x,y,z) then
+        designate_dig(x,y,z, df.tile_dig_designation.UpDownStair)
         return true
     end
     return false
@@ -280,196 +255,59 @@ end
 
 -------------------------------------------------------------------------------
 -- Initial Fortress Layout
---- Create a basic starter dig plan with proper surface access
---- INTELLIGENT APPROACH: Scans 360° for safest direction
---- Uses terrain module to avoid water/magma/aquifers
+-------------------------------------------------------------------------------
+
+--- Create a basic starter dig plan using the static layout engine
 local function create_starter_layout()
     local wagon_x, wagon_y, wagon_z = find_fortress_center()
     if not wagon_x then return 0 end
     
     local mgr_state = state.get_manager_state(MANAGER_NAME)
+    if mgr_state.starter_layout_complete then return 0 end
     
-    -- Only do this once
-    if mgr_state.starter_layout_complete then
-        return 0
-    end
-    
-    utils.log_action(MANAGER_NAME, "Creating starter fortress layout", 
+    utils.log_action(MANAGER_NAME, "Generating starter static layout", 
         string.format("Wagon at: (%d, %d, %d)", wagon_x, wagon_y, wagon_z))
+        
+    -- Generate plan using extracted module
+    local plan = static_layout.generate(wagon_x, wagon_y, wagon_z)
+    if not plan or not plan.tiles or #plan.tiles == 0 then
+        utils.log_error("Static layout generation failed", MANAGER_NAME)
+        return 0
+    end
     
+    -- Execute Plan
     local designations = 0
-    local surface_z = wagon_z
-    
-    -- Step 1: USE TERRAIN MODULE to find safest direction
-    -- This scans all 4 directions and picks the one with fewest hazards
-    local best_dir, safety_score, hazards, all_scores = terrain.find_safest_direction(
-        wagon_x, wagon_y, surface_z
-    )
-    
-    if not best_dir then
-        utils.log_error("CRITICAL: No safe direction found for dig!", MANAGER_NAME)
-        return 0
-    end
-    
-    -- Log the analysis
-    utils.log(string.format("Direction analysis -> Best: %s (score: %d)", 
-        best_dir, safety_score), MANAGER_NAME)
-    
-    if #hazards > 0 and #hazards <= 3 then
-        for _, h in ipairs(hazards) do
-            utils.log_debug("  Hazard: " .. h, MANAGER_NAME)
-        end
-    end
-    
-    -- Calculate entrance position based on best direction
-    local entrance_x, entrance_y = wagon_x, wagon_y
-    local direction_vectors = {
-        north = {0, -10},
-        south = {0, 10},
-        east = {10, 0},
-        west = {-10, 0}
-    }
-    local vec = direction_vectors[best_dir]
-    entrance_x = wagon_x + vec[1]
-    entrance_y = wagon_y + vec[2]
-    local direction = best_dir
-    
-    utils.log_debug("  Entrance 10 tiles " .. direction .. " of wagon", MANAGER_NAME)
-    
-    -- Step 2: Find the first underground level (with diggable stone)
-    local underground_z = nil
-    for z = surface_z - 1, surface_z - 10, -1 do
-        if is_safe_to_dig(entrance_x, entrance_y, z) then
-            local ttype = utils.get_tile_type(entrance_x, entrance_y, z)
-            if is_diggable(ttype) then
-                underground_z = z
-                break
-            end
-        end
-    end
-    
-    if not underground_z then
-        utils.log_warn("Could not find underground layer", MANAGER_NAME)
-        return 0
-    end
-    
-    utils.log_debug("  Underground at Z=" .. underground_z, MANAGER_NAME)
-    
-    -- Step 3: Channel from surface to underground (creates ramp)
-    -- Channel each level from surface down to underground
-    local channel_count = 0
-    for z = surface_z, underground_z + 1, -1 do
-        if is_safe_to_dig(entrance_x, entrance_y, z) then
-            designate_dig(entrance_x, entrance_y, z, df.tile_dig_designation.Channel)
-            channel_count = channel_count + 1
-        end
-    end
-    designations = designations + channel_count
-    utils.log_debug("  Channeled " .. channel_count .. " levels for ramp access", MANAGER_NAME)
-    
-    -- Step 4: Dig corridor at underground level from ramp
-    local entry_z = underground_z
-    local cx, cy = entrance_x, entrance_y
-    
-    -- Dig corridor extending away from wagon
-    local corridor_len = 15
-    local corridor_tiles = 0
-    if direction == "north" then
-        for i = 0, corridor_len do
-            if is_diggable(utils.get_tile_type(cx, cy - i, entry_z)) then
-                designate_dig(cx, cy - i, entry_z)
-                corridor_tiles = corridor_tiles + 1
-            end
-        end
-        cy = cy - corridor_len
-    elseif direction == "south" then
-        for i = 0, corridor_len do
-            if is_diggable(utils.get_tile_type(cx, cy + i, entry_z)) then
-                designate_dig(cx, cy + i, entry_z)
-                corridor_tiles = corridor_tiles + 1
-            end
-        end
-        cy = cy + corridor_len
-    elseif direction == "west" then
-        for i = 0, corridor_len do
-            if is_diggable(utils.get_tile_type(cx - i, cy, entry_z)) then
-                designate_dig(cx - i, cy, entry_z)
-                corridor_tiles = corridor_tiles + 1
-            end
-        end
-        cx = cx - corridor_len
-    else  -- east
-        for i = 0, corridor_len do
-            if is_diggable(utils.get_tile_type(cx + i, cy, entry_z)) then
-                designate_dig(cx + i, cy, entry_z)
-                corridor_tiles = corridor_tiles + 1
-            end
-        end
-        cx = cx + corridor_len
-    end
-    designations = designations + corridor_tiles
-    utils.log_debug("  Entry corridor: " .. corridor_tiles .. " tiles", MANAGER_NAME)
-    
-    -- Step 5: Main fortress area at end of corridor
-    -- Down stair at corridor end
-    if is_diggable(utils.get_tile_type(cx, cy, entry_z)) then
-        designate_dig(cx, cy, entry_z, df.tile_dig_designation.DownStair)
-        designations = designations + 1
-    end
-    
-    -- Cross corridors for workshops
-    local cross1 = dig_corridor(cx - 10, cy, entry_z, cx + 10, cy)
-    local cross2 = dig_corridor(cx, cy - 10, entry_z, cx, cy + 10)
-    designations = designations + cross1 + cross2
-    utils.log_debug("  Cross corridors: " .. (cross1 + cross2) .. " tiles", MANAGER_NAME)
-    
-    -- Workshop rooms (4x 5x5)
-    local rooms = 0
-    rooms = rooms + dig_room(cx - 8, cy - 3, entry_z, 5, 5)
-    rooms = rooms + dig_room(cx - 8, cy + 3, entry_z, 5, 5)
-    rooms = rooms + dig_room(cx + 8, cy - 3, entry_z, 5, 5)
-    rooms = rooms + dig_room(cx + 8, cy + 3, entry_z, 5, 5)
-    designations = designations + rooms
-    utils.log_debug("  Workshop rooms: " .. rooms .. " tiles", MANAGER_NAME)
-    
-    -- Central hall
-    local hall = dig_room(cx, cy, entry_z, 9, 9)
-    designations = designations + hall
-    utils.log_debug("  Central hall: " .. hall .. " tiles", MANAGER_NAME)
-    
-    -- Step 6: Lower level for storage
-    local storage_z = entry_z - 1
-    if is_safe_to_dig(cx, cy, storage_z) then
-        -- Up/down stairs
-        if is_diggable(utils.get_tile_type(cx, cy, storage_z)) then
-            designate_dig(cx, cy, storage_z, df.tile_dig_designation.UpDownStair)
-            designations = designations + 1
+    for _, tile in ipairs(plan.tiles) do
+        local dig_type = df.tile_dig_designation.Default
+        if tile.dig_type == "channel" then dig_type = df.tile_dig_designation.Channel
+        elseif tile.dig_type == "stair_down" then dig_type = df.tile_dig_designation.DownStair
+        elseif tile.dig_type == "stair_up" then dig_type = df.tile_dig_designation.UpStair
+        elseif tile.dig_type == "stair_updown" then dig_type = df.tile_dig_designation.UpDownStair
         end
         
-        -- Storage corridors
-        local s1 = dig_corridor(cx - 15, cy, storage_z, cx + 15, cy)
-        local s2 = dig_corridor(cx, cy - 15, storage_z, cx, cy + 15)
-        designations = designations + s1 + s2
-        utils.log_debug("  Storage level: " .. (s1 + s2) .. " tiles", MANAGER_NAME)
+        if designate_dig(tile.x, tile.y, tile.z, dig_type) then
+            designations = designations + 1
+        end
     end
     
     -- Save state
     if designations > 0 then
         mgr_state.starter_layout_complete = true
-        mgr_state.center_x = cx
-        mgr_state.center_y = cy
-        mgr_state.surface_z = surface_z
-        mgr_state.entry_z = entry_z
-        mgr_state.storage_z = storage_z
+        mgr_state.center_x = plan.center_x
+        mgr_state.center_y = plan.center_y
+        mgr_state.surface_z = plan.surface_z
+        mgr_state.entry_z = plan.entry_z
+        mgr_state.storage_z = plan.storage_z
         state.set_manager_state(MANAGER_NAME, mgr_state)
         
-        utils.log_action(MANAGER_NAME, "Layout complete", 
+        utils.log_action(MANAGER_NAME, "Static Layout complete", 
             designations .. " tiles designated")
         utils.track_designation(designations)
     end
     
     return designations
 end
+
 
 -------------------------------------------------------------------------------
 -- Expansion Logic
@@ -579,19 +417,31 @@ local function check_expansion()
     
     if needed_bedroom_levels > mgr_state.bedroom_levels then
         -- Dig new bedroom level below storage
-        local bedroom_z = mgr_state.storage_z - 1 - mgr_state.bedroom_levels
+        local current_lowest = mgr_state.storage_z - mgr_state.bedroom_levels
         
-        -- First add stairway
-        dig_stairs_updown(mgr_state.center_x, mgr_state.center_y, bedroom_z)
+        -- SMART CHECK: ask planner for safe level
+        local next_z, strategy = planner.get_safe_expansion_z(current_lowest, mgr_state.center_x, mgr_state.center_y)
         
-        -- Then dig the level
-        designations = dig_bedroom_level(bedroom_z)
-        
-        if designations > 0 then
-            mgr_state.bedroom_levels = mgr_state.bedroom_levels + 1
-            utils.log_action(MANAGER_NAME, "Bedroom level added",
-                "Level " .. mgr_state.bedroom_levels .. ", " .. designations .. " tiles")
-            utils.track_designation(designations)
+        if next_z and strategy == "vertical" then
+             local bedroom_z = next_z
+             
+            -- First add stairway (might need to connect through gaps if we skipped levels)
+            -- Simple robust approach: Dig stairs all the way down from current lowest
+            for z = current_lowest, bedroom_z, -1 do
+                 dig_stairs_updown(mgr_state.center_x, mgr_state.center_y, z)
+            end
+            
+            -- Then dig the level
+            designations = dig_bedroom_level(bedroom_z)
+            
+            if designations > 0 then
+                mgr_state.bedroom_levels = mgr_state.bedroom_levels + (current_lowest - bedroom_z) -- accurate depth tracking
+                utils.log_action(MANAGER_NAME, "Bedroom level added",
+                    "Level " .. mgr_state.bedroom_levels .. " (Z="..bedroom_z.."), " .. designations .. " tiles")
+                utils.track_designation(designations)
+            end
+        else
+            utils.log_warn("Expansion blocked: No safe Z-level found.", MANAGER_NAME)
         end
     end
     

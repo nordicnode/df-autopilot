@@ -68,6 +68,7 @@ local function get_nobles()
                     table.insert(nobles, {
                         position_name = pos_info.name[0] or "Unknown",
                         position_code = pos_info.code or "unknown",
+                        precedence = pos_info.precedence,
                         histfig_id = position.histfig,
                         unit = unit
                     })
@@ -130,6 +131,9 @@ local function check_noble_satisfaction()
                         is_satisfied = false
                         table.insert(results.needs, {
                             noble = noble.position_name,
+                            noble_code = noble.position_code,
+                            precedence = noble.precedence,
+                            unit = noble.unit,
                             room = room_type
                         })
                     end
@@ -145,6 +149,67 @@ local function check_noble_satisfaction()
     end)
     
     return results
+end
+
+-------------------------------------------------------------------------------
+-- Room Assignment
+-------------------------------------------------------------------------------
+
+--- Find a vacant room of a specific type
+-- @param room_type: "bedroom", "office", "dining", "tomb"
+-- @return occupied building pointer or nil
+local function find_vacant_room(room_type)
+    local target_type = nil
+    
+    if room_type == "bedroom" then target_type = df.building_type.Bed
+    elseif room_type == "office" then target_type = df.building_type.Chair
+    elseif room_type == "dining" then target_type = df.building_type.Table
+    elseif room_type == "tomb" then target_type = df.building_type.Coffin
+    end
+    
+    if not target_type then return nil end
+    
+    for _, building in pairs(df.global.world.buildings.all) do
+        if building:getType() == target_type and building.is_room then
+            -- Check if owned
+            if not building.owner then
+                -- Check if it's already assigned to someone via valid profile?
+                -- DF stores ownership in building.owner (unit reference)
+                return building
+            end
+        end
+    end
+    
+    return nil
+end
+
+--- Assign rooms to nobles who need them
+local function assign_noble_rooms(satisfaction_results)
+    if #satisfaction_results.needs == 0 then return end
+    
+    -- Sort needs by noble precedence (lower value = higher rank)
+    table.sort(satisfaction_results.needs, function(a, b)
+        local pa = a.precedence or 10000
+        local pb = b.precedence or 10000
+        return pa < pb
+    end)
+    
+    for _, need in ipairs(satisfaction_results.needs) do
+        local building = find_vacant_room(need.room)
+        
+        if building then
+            local noble_unit = need.unit -- We need to pass the unit object in the need list
+            if noble_unit then
+                 -- Assign room
+                 dfhack.buildings.setOwner(building, noble_unit)
+                 utils.log_action(MANAGER_NAME, "Assigned Room", 
+                    "Assigned " .. need.room .. " to " .. need.noble)
+            end
+        else
+            -- If we can't find a room, we might want to trigger construction (Future Phase)
+            utils.log_skip(MANAGER_NAME, "Room Assignment", "No vacant " .. need.room .. " for " .. need.noble)
+        end
+    end
 end
 
 -------------------------------------------------------------------------------
@@ -167,7 +232,10 @@ function update()
     mgr_state.unsatisfied_count = #satisfaction.unsatisfied
     mgr_state.needs = satisfaction.needs
     
-    -- Warn about unsatisfied nobles
+    -- Attempt to assign rooms to unsatisfied nobles
+    assign_noble_rooms(satisfaction)
+    
+    -- Warn about remaining unsatisfied nobles (re-check not needed for logs, just use initial list)
     if #satisfaction.unsatisfied > 0 and not mgr_state.warned then
         for _, name in ipairs(satisfaction.unsatisfied) do
             utils.log_warn("Noble needs rooms: " .. name)

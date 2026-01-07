@@ -5,6 +5,12 @@
 
 local config = reqscript("df-autopilot/config")
 
+-- Polyfill for math.sign
+function math.sign(x)
+  return x > 0 and 1 or x < 0 and -1 or 0
+end
+
+
 -------------------------------------------------------------------------------
 -- Logging System
 -------------------------------------------------------------------------------
@@ -391,6 +397,32 @@ function count_empty_containers(item_type)
     end
     return count
 end
+
+--- Check if we have metal bars suitable for weapons/armor
+function has_metal_bars(amount)
+    amount = amount or 1
+    local bars = 0
+    
+    for _, item in pairs(df.global.world.items.other.BAR) do
+        if not item.flags.forbid and not item.flags.dump then
+            local mat_info = dfhack.matinfo.decode(item)
+            if mat_info and mat_info.material then
+                -- Check for common weapon metals
+                -- Iron, Steel, Bronze, Copper, Silver, etc.
+                -- Using flags would be better but simple ID check works for vanilla
+                local mat_id = mat_info.material.id
+                if mat_id == "IRON" or mat_id == "STEEL" or mat_id == "BRONZE" or 
+                   mat_id == "COPPER" or mat_id == "SILVER" or mat_id == "ADAMANTINE" or
+                   mat_id == "BISMUTH_BRONZE" then
+                    bars = bars + item:getStackSize()
+                end
+            end
+        end
+    end
+    
+    return bars >= amount
+end
+
 
 -------------------------------------------------------------------------------
 -- Building Helpers

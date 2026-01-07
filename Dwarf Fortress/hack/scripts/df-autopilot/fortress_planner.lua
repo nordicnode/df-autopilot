@@ -8,6 +8,7 @@ local utils = reqscript("df-autopilot/utils")
 local config = reqscript("df-autopilot/config")
 local state = reqscript("df-autopilot/state")
 local terrain = reqscript("df-autopilot/terrain")
+local pf = reqscript("df-autopilot/pathfinding")
 
 -------------------------------------------------------------------------------
 -- Constants
@@ -16,113 +17,66 @@ local terrain = reqscript("df-autopilot/terrain")
 local PLANNER_NAME = "planner"
 
 -- Room type definitions with sizes and priorities
-local ROOM_TYPES = {
-    ENTRANCE = { 
-        id = "entrance", name = "Entrance", 
-        min_w = 3, min_h = 3, max_w = 5, max_h = 5,
-        priority = 1, count = 1, z_pref = "entry"
-    },
-    WORKSHOP_HALL = {
-        id = "workshop_hall", name = "Workshop Hall",
-        min_w = 7, min_h = 7, max_w = 15, max_h = 15,
-        priority = 1, count = 1, z_pref = "entry"
-    },
-    STORAGE_MAIN = {
-        id = "storage_main", name = "Main Storage",
-        min_w = 6, min_h = 6, max_w = 12, max_h = 12,
-        priority = 1, count = 1, z_pref = "storage"
-    },
-    DINING = {
-        id = "dining", name = "Dining Hall",
-        min_w = 5, min_h = 5, max_w = 9, max_h = 9,
-        priority = 2, count = 1, z_pref = "common"
-    },
-    DORMITORY = {
-        id = "dormitory", name = "Dormitory",
-        min_w = 4, min_h = 4, max_w = 7, max_h = 7,
-        priority = 2, per_pop = 10, z_pref = "living"
-    },
-    BEDROOM = {
-        id = "bedroom", name = "Bedroom",
-        min_w = 2, min_h = 2, max_w = 3, max_h = 3,
-        priority = 3, per_pop = 1, z_pref = "living"
-    },
-    HOSPITAL = {
-        id = "hospital", name = "Hospital",
-        min_w = 4, min_h = 4, max_w = 6, max_h = 6,
-        priority = 2, count = 1, z_pref = "common"
-    },
-    TAVERN = {
-        id = "tavern", name = "Tavern",
-        min_w = 5, min_h = 5, max_w = 8, max_h = 8,
-        priority = 3, count = 1, z_pref = "common"
-    },
-    TEMPLE = {
-        id = "temple", name = "Temple",
-        min_w = 4, min_h = 4, max_w = 7, max_h = 7,
-        priority = 3, count = 1, z_pref = "common"
-    },
-    LIBRARY = {
-        id = "library", name = "Library",
-        min_w = 3, min_h = 3, max_w = 5, max_h = 5,
-        priority = 4, count = 1, z_pref = "common"
-    },
-    BARRACKS = {
-        id = "barracks", name = "Barracks",
-        min_w = 5, min_h = 5, max_w = 8, max_h = 8,
-        priority = 3, per_military = 10, z_pref = "military"
-    },
-    TRAINING = {
-        id = "training", name = "Training Room",
-        min_w = 5, min_h = 5, max_w = 10, max_h = 10,
-        priority = 3, count = 1, z_pref = "military"
-    },
-    FARM = {
-        id = "farm", name = "Farm Plot Area",
-        min_w = 4, min_h = 4, max_w = 6, max_h = 6,
-        priority = 2, count = 2, z_pref = "entry", needs_soil = true
-    },
-    CISTERN = {
-        id = "cistern", name = "Cistern",
-        min_w = 3, min_h = 3, max_w = 5, max_h = 5,
-        priority = 4, count = 1, z_pref = "deep"
-    },
-    FORGE_AREA = {
-        id = "forge_area", name = "Forge Area",
-        min_w = 6, min_h = 6, max_w = 10, max_h = 10,
-        priority = 3, count = 1, z_pref = "entry"
-    },
-    JAIL = {
-        id = "jail", name = "Jail",
-        min_w = 3, min_h = 3, max_w = 5, max_h = 5,
-        priority = 4, count = 1, z_pref = "common"
-    },
-    TOMB = {
-        id = "tomb", name = "Tomb",
-        min_w = 5, min_h = 5, max_w = 10, max_h = 10,
-        priority = 4, count = 1, z_pref = "deep"
-    },
-    TRADE_DEPOT = {
-        id = "trade_depot", name = "Trade Depot Area",
-        min_w = 5, min_h = 5, max_w = 7, max_h = 7,
-        priority = 2, count = 1, z_pref = "entry"
-    },
-    PASTURE = {
-        id = "pasture", name = "Pasture",
-        min_w = 6, min_h = 6, max_w = 12, max_h = 12,
-        priority = 3, count = 1, z_pref = "entry", surface_only = true
-    },
-    CORRIDOR = {
-        id = "corridor", name = "Corridor",
-        min_w = 1, min_h = 1, max_w = 1, max_h = 50,
-        priority = 0, count = -1, z_pref = "any"
-    },
-    STAIRWELL = {
-        id = "stairwell", name = "Stairwell",
-        min_w = 1, min_h = 1, max_w = 3, max_h = 3,
-        priority = 0, count = -1, z_pref = "any"
-    },
-}
+local json = require("json")
+
+-- Room type definitions
+-- Loaded from config/room_layouts.json with hardcoded fallback
+local ROOM_TYPES = {}
+
+local function load_room_config()
+    local config_path = "df-autopilot/config/room_layouts.json"
+    
+    -- Try to load from file
+    local file = io.open(dfhack.getHackPath() .. "/scripts/" .. config_path, "r")
+    if not file then
+        -- Try relative path if not absolute
+        file = io.open(config_path, "r")
+    end
+    
+    if file then
+        local content = file:read("*all")
+        file:close()
+        local ok, data = pcall(json.decode, content)
+        if ok and data then
+            ROOM_TYPES = data
+            utils.log("Loaded room layouts from " .. config_path, PLANNER_NAME)
+            return
+        else
+            utils.log_error("Failed to parse room layouts config: " .. tostring(data), PLANNER_NAME)
+        end
+    else
+        utils.log_warn("Room layouts config not found at " .. config_path, PLANNER_NAME)
+    end
+    
+    -- Fallback defaults if load failed
+    ROOM_TYPES = {
+        ENTRANCE = { id="entrance", name="Entrance", min_w=3, min_h=3, max_w=5, max_h=5, priority=1, count=1, z_pref="entry" },
+        WORKSHOP_HALL = { id="workshop_hall", name="Workshop Hall", min_w=7, min_h=7, max_w=15, max_h=15, priority=1, count=1, z_pref="entry" },
+        STORAGE_MAIN = { id="storage_main", name="Main Storage", min_w=6, min_h=6, max_w=12, max_h=12, priority=1, count=1, z_pref="storage" },
+        DINING = { id="dining", name="Dining Hall", min_w=5, min_h=5, max_w=9, max_h=9, priority=2, count=1, z_pref="common" },
+        DORMITORY = { id="dormitory", name="Dormitory", min_w=4, min_h=4, max_w=7, max_h=7, priority=2, per_pop=10, z_pref="living" },
+        BEDROOM = { id="bedroom", name="Bedroom", min_w=2, min_h=2, max_w=3, max_h=3, priority=3, per_pop=1, z_pref="living" },
+        HOSPITAL = { id="hospital", name="Hospital", min_w=4, min_h=4, max_w=6, max_h=6, priority=2, count=1, z_pref="common" },
+        TAVERN = { id="tavern", name="Tavern", min_w=5, min_h=5, max_w=8, max_h=8, priority=3, count=1, z_pref="common" },
+        TEMPLE = { id="temple", name="Temple", min_w=4, min_h=4, max_w=7, max_h=7, priority=3, count=1, z_pref="common" },
+        LIBRARY = { id="library", name="Library", min_w=3, min_h=3, max_w=5, max_h=5, priority=4, count=1, z_pref="common" },
+        BARRACKS = { id="barracks", name="Barracks", min_w=5, min_h=5, max_w=8, max_h=8, priority=3, per_military=10, z_pref="military" },
+        TRAINING = { id="training", name="Training Room", min_w=5, min_h=5, max_w=10, max_h=10, priority=3, count=1, z_pref="military" },
+        FARM = { id="farm", name="Farm Plot Area", min_w=4, min_h=4, max_w=6, max_h=6, priority=2, count=2, z_pref="entry", needs_soil=true },
+        CISTERN = { id="cistern", name="Cistern", min_w=3, min_h=3, max_w=5, max_h=5, priority=4, count=1, z_pref="deep" },
+        FORGE_AREA = { id="forge_area", name="Forge Area", min_w=6, min_h=6, max_w=10, max_h=10, priority=3, count=1, z_pref="entry" },
+        JAIL = { id="jail", name="Jail", min_w=3, min_h=3, max_w=5, max_h=5, priority=4, count=1, z_pref="common" },
+        TOMB = { id="tomb", name="Tomb", min_w=5, min_h=5, max_w=10, max_h=10, priority=4, count=1, z_pref="deep" },
+        TRADE_DEPOT = { id="trade_depot", name="Trade Depot Area", min_w=5, min_h=5, max_w=7, max_h=7, priority=2, count=1, z_pref="entry" },
+        PASTURE = { id="pasture", name="Pasture", min_w=6, min_h=6, max_w=12, max_h=12, priority=3, count=1, z_pref="entry", surface_only=true },
+        CORRIDOR = { id="corridor", name="Corridor", min_w=1, min_h=1, max_w=1, max_h=50, priority=0, count=-1, z_pref="any" },
+        STAIRWELL = { id="stairwell", name="Stairwell", min_w=1, min_h=1, max_w=3, max_h=3, priority=0, count=-1, z_pref="any" }
+    }
+end
+
+-- Initialize room types on module load
+load_room_config()
+
 
 -- Z-level organization (functional separation)
 local Z_LEVELS = {
@@ -657,92 +611,143 @@ function generate_fortress_plan(wagon_x, wagon_y, surface_z, population)
     
     utils.log_debug("Entry point: (" .. entry_x .. ", " .. entry_y .. ") surface_z=" .. surface_z .. " hub_z=" .. entry_z, PLANNER_NAME)
     
-    -- --- 1. TRADE DEPOT LEVEL (Near Surface) ---
-    -- Ideally at surface_z - 1 or -2, but MUST be below the aquifer if one exists
-    -- We check if surface_z - 1 is wet. If so, we go deeper.
-    local depot_z = surface_z - 1
-    local depot_width = 8
-    local depot_height = 8 -- fits 5x5 depot + space
+    -- --- 1 & 2. SAFE RAMP & TRADE DEPOT (Surface to Safe Level) ---
+    -- CRITICAL UPDATE: We now scan for aquifers layer-by-layer.
     
-    -- Simple Aquifer Check for Depot Level
-    if terrain.scan_for_aquifer(entry_x, entry_y, depot_z, depot_width, depot_height) then
-        utils.log_warn("Aquifer detected at Z-1! Pushing Trade Depot deeper.", PLANNER_NAME)
-        -- Try to find a dry layer above the hub
-        for z = surface_z - 2, entry_z + 1, -1 do
-            if not terrain.scan_for_aquifer(entry_x, entry_y, z, depot_width, depot_height) then
-                depot_z = z
-                break
+    local ramp_path_tiles = {}
+    local depot_level = nil
+    
+    -- Function to check a 3x3 area for safety (wagon width)
+    local function is_area_safe_for_ramp(cx, cy, cz)
+        for dx = -1, 1 do
+            for dy = -1, 1 do
+                if terrain.is_aquifer(cx+dx, cy+dy, cz) then return false end
+                if terrain.has_magma(cx+dx, cy+dy, cz) then return false end
+                -- Note: We allow water if it's surface water (we can channel it), 
+                -- but avoid underground water sources.
             end
         end
+        return true
     end
-    
-    utils.log_debug("Trade Depot placed at Z=" .. depot_z, PLANNER_NAME)
 
-    -- --- 2. ENTRANCE TUNNEL (Surface to Depot) ---
-    -- CRITICAL: Wagon access requires 3-tile wide ramps/corridors
-    -- We build a 3-wide ramp from Surface down to Depot Z
+    -- Smart Ramp Generation using A* Pathfinding
+    -- Attempts to find a safe wagon-accessible path from Surface to Depth-20
+    utils.log("Starting A* Ramp Generation from Z=" .. surface_z .. " to Z=" .. (surface_z-20), PLANNER_NAME)
     
-    -- Calculate Ramp Length needed (Surface Z to Depot Z)
-    local z_diff = surface_z - depot_z
-    local ramp_length = math.max(3, z_diff + 2) -- At least 3 tiles long for wagons
+    local start_node = {x = wagon_x, y = wagon_y, z = surface_z}
+    local target_depth_abs = surface_z - 20
+    local goal_node = {x = wagon_x, y = wagon_y, z = target_depth_abs}
     
-    local tunnel_end_x = wagon_x + vec[1] * ramp_length
-    local tunnel_end_y = wagon_y + vec[2] * ramp_length
-    
-    for i = 0, ramp_length do
-        local tx = wagon_x + vec[1] * i
-        local ty = wagon_y + vec[2] * i
-        
-        -- Create a 3-wide path (perpendicular to entrance vector)
-        local px, py = -vec[2], vec[1] -- perpendicular vector
-        
-        for w = -1, 1 do -- Width -1, 0, 1
-            local wx = tx + px * w
-            local wy = ty + py * w
-            
-            if i == 0 then
-                -- ENTRY: Channel surface (Creates Ramp at Z-1)
-                table.insert(all_tiles, {x = wx, y = wy, z = surface_z, dig_type = "channel"})
-            elseif i < ramp_length then
-                -- TUNNEL: Dig path at Depot Z (or intermediate levels if deep)
-                -- For simple 1-level drop: Dig at Depot Z
-                 table.insert(all_tiles, {x = wx, y = wy, z = depot_z, dig_type = "dig"})
+    -- Safety check helper
+    local function is_safe_3x3(nx, ny, nz)
+        for dx = -1, 1 do
+            for dy = -1, 1 do
+                local t = terrain.analyze_tile(nx + dx, ny + dy, nz)
+                if t.aquifer then return false end
+                if t.hidden_void or t.open_space then 
+                    -- Only safe if it's natural open space (surface) or we are digging?
+                    -- Caverns are hidden_void usually.
+                    return false 
+                end
+                if t.magma or t.water then return false end
             end
         end
+        return true
+    end
+
+    local callbacks = {
+        neighbors = function(node)
+            local neighbors = {}
+            -- Horizontal
+            local dirs = {{0,1}, {0,-1}, {1,0}, {-1,0}}
+            for _, d in ipairs(dirs) do
+                table.insert(neighbors, {x = node.x + d[1], y = node.y + d[2], z = node.z})
+            end
+            -- Downward (Ramp)
+            for _, d in ipairs(dirs) do
+                 table.insert(neighbors, {x = node.x + d[1], y = node.y + d[2], z = node.z - 1})
+            end
+            return neighbors
+        end,
         
-        -- If Depot is deep, we need a long ramp.
-        -- For now optimizing for Depot at Z-1 (common case). 
-        -- If Depot > Z-1, we need iterative ramps.
-        if z_diff > 1 and i > 0 and i <= z_diff then
-             -- Logic for multi-level ramp would go here.
-             -- Keeping it simple: Assume Depot at Z-1 for now, or use stairs if deep (wagons can't use stairs, but this is MVP)
+        cost = function(curr, next)
+            local dist = math.abs(curr.x - next.x) + math.abs(curr.y - next.y) + math.abs(curr.z - next.z)
+            local cost = dist
+            
+            -- Heavily penalize invalid terrain to act as "Avoid"
+            -- We must check the 3x3 footprint at the TARGET location
+            if not is_safe_3x3(next.x, next.y, next.z) then
+                return 999999 -- Infinite cost for hazard
+            end
+            
+            if next.z < curr.z then
+                 cost = cost + 2 -- Bias against plunging too fast/stairs
+            end
+            
+            return cost
+        end,
+        
+        is_valid = function(node)
+            if node.z > surface_z or node.z < 0 then return false end
+            return true
+        end,
+        
+        heuristic = function(node, goal)
+            -- Encourage going DOWN (to z) over horizontal
+            local dz = math.abs(node.z - goal.z)
+            local dxy = math.abs(node.x - goal.x) + math.abs(node.y - goal.y)
+            return dz * 0.8 + dxy * 2 -- Heuristic tuning
+        end
+    }
+    
+    local path = pf.find_path(start_node, goal_node, callbacks)
+    
+    if not path then
+         utils.log_error("CRITICAL: A* Ramp Generation Failed. No safe non-aquifer path found.", PLANNER_NAME)
+         return false
+    end
+    
+    -- Convert path to designations
+    local depot_level = path[#path].z
+    local depot_found = true
+    
+    for i = 1, #path do
+        local p = path[i]
+        local prev = path[i-1]
+        
+        -- Dig 3-wide
+        for dx = -1, 1 do
+            for dy = -1, 1 do
+                 if prev and p.z < prev.z then
+                     -- Ramp Down
+                     table.insert(ramp_path_tiles, {x=p.x + dx, y=p.y + dy, z=p.z, dig_type="ramp"})
+                     table.insert(ramp_path_tiles, {x=p.x + dx, y=p.y + dy, z=prev.z, dig_type="channel"})
+                 else
+                     -- Flat
+                     table.insert(ramp_path_tiles, {x=p.x + dx, y=p.y + dy, z=p.z, dig_type="dig"})
+                 end
+            end
         end
     end
     
-    -- --- 3. TRADE DEPOT ROOM ---
-    -- Centered at end of tunnel at depot_z
-    local depot_room_x = tunnel_end_x + vec[1] * 4
-    local depot_room_y = tunnel_end_y + vec[2] * 4
+    -- Commit the ramp tiles
+    for _, t in ipairs(ramp_path_tiles) do table.insert(all_tiles, t) end
     
-    -- Create Room Object for Depot
-    if terrain.check_area_safety(depot_room_x, depot_room_y, depot_z, 7, 7) then
-         local depot_room = Room.new(graph:get_next_id(), ROOM_TYPES.TRADE_DEPOT, depot_room_x, depot_room_y, depot_z, 5, 5)
-         graph:add_room(depot_room)
-         for _, tile in ipairs(depot_room:get_tiles()) do table.insert(all_tiles, tile) end
-         
-         -- Connect Tunnel to Depot
-         local conn_tiles = create_corridor_tiles(tunnel_end_x, tunnel_end_y, depot_room_x, depot_room_y, depot_z)
-         -- Make corridor 3-wide for wagons
-          for _, t in ipairs(conn_tiles) do
-              -- Main tile
-              table.insert(all_tiles, t)
-              -- Widen
-              -- (Simplification: just dig neighbors)
-              for dx = -1, 1 do for dy = -1, 1 do
-                   table.insert(all_tiles, {x = t.x+dx, y=t.y+dy, z=t.z, dig_type="dig"})
-              end end
-          end
-    end
+    depot_room_x = path[#path].x
+    depot_room_y = path[#path].y
+    
+    -- Create Trade Depot Room
+    utils.log("Placing Trade Depot at Z-" .. (surface_z - depot_level), PLANNER_NAME)
+    
+    local depot_room = Room.new(graph:get_next_id(), ROOM_TYPES.TRADE_DEPOT, depot_room_x, depot_room_y, depot_level, 7, 7)
+    graph:add_room(depot_room)
+    for _, tile in ipairs(depot_room:get_tiles()) do table.insert(all_tiles, tile) end
+    
+    -- Update entry info
+    depot_z = depot_level
+    tunnel_end_x = depot_room_x
+    tunnel_end_y = depot_room_y
+
 
     -- --- 4. TRAP HALL (Depot to Hub) ---
     -- Long narrow(ish) corridor connecting Depot Z to Central Stairwell
@@ -1327,6 +1332,73 @@ function should_expand(population)
     
     return population > capacity * 0.8
 end
+
+-- Check if a Z-level is safe for expansion (no caverns, magma, water)
+function check_z_level_safety(z, center_x, center_y, radius)
+    -- Sample points in a grid around the center
+    local step = 10
+    radius = radius or 40
+    
+    for x = center_x - radius, center_x + radius, step do
+        for y = center_y - radius, center_y + radius, step do
+            local analysis = terrain.analyze_tile(x, y, z)
+            if not analysis.safe then
+                -- Ignore solid walls, we only care about bad stuff
+                if analysis.reason ~= "solid wall" then
+                    -- If it's a specific hazard like magma/water/open space
+                    if analysis.liquid or analysis.open then
+                         return false, analysis.reason
+                    end
+                end
+            end
+            
+            -- Also check strictly for open space (caverns) if terrain analyzer didn't catch it
+            local ttype = utils.get_tile_type(x, y, z)
+            if ttype then
+                local shape = df.tiletype.attrs[ttype].shape
+                if shape == df.tiletype_shape.EMPTY or shape == df.tiletype_shape.RAMP_TOP then
+                    return false, "cavern/open space"
+                end
+            end
+        end
+    end
+    
+    return true
+end
+
+
+-- Find the next safe Z-level for expansion (Vertical vs Horizontal)
+-- Returns: z_level, strategy ("vertical" or "horizontal")
+function get_safe_expansion_z(current_lowest_z, center_x, center_y)
+    -- Try going down first
+    local next_z = current_lowest_z - 1
+    local safe, reason = check_z_level_safety(next_z, center_x, center_y)
+    
+    if safe then
+        return next_z, "vertical"
+    end
+    
+    utils.log(string.format("Vertical expansion to Z=%d blocked: %s", next_z, reason), PLANNER_NAME)
+    
+    -- Vertical blocked. Try horizontal expansion on existing levels?
+    -- For now, just try to find ANY safe level below, skipping unsafe ones?
+    -- Or stick to current level?
+    
+    -- Attempt skip (try up to 5 levels down)
+    for i = 2, 5 do
+        local check_z = current_lowest_z - i
+        local s, r = check_z_level_safety(check_z, center_x, center_y)
+        if s then
+             utils.log(string.format("Found safe level at Z=%d (skipped %d levels)", check_z, i-1), PLANNER_NAME)
+             return check_z, "vertical"
+        end
+    end
+    
+    -- If we can't go down, return nil to halt expansion or current level to force horizontal (not impl yet)
+    utils.log_error("Could not find safe expansion level!", PLANNER_NAME)
+    return nil, "blocked"
+end
+
 
 -- Get recommended expansion type
 function get_expansion_recommendation(population, military_count)
